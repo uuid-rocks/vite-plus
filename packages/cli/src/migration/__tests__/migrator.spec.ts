@@ -9057,6 +9057,113 @@ export default { fmt, lint };
   );
 
   it.each([
+    ['.', '.', 'script'],
+    ['packages/app', '.', 'script'],
+    ['.', 'packages/app', 'script'],
+    ['.', '.', 'module'],
+    ['packages/app', '.', 'module'],
+    ['.', 'packages/app', 'module'],
+  ])('merges independent configs when %s references %s via %s', (consumer, target, kind) => {
+    const appDir = path.join(tmpDir, 'packages/app');
+    fs.mkdirSync(appDir, { recursive: true });
+    const consumerDir = path.join(tmpDir, consumer);
+    const targetDir = path.join(tmpDir, target);
+    const independentDir = target === '.' ? appDir : tmpDir;
+    const relativePath = path.relative(consumerDir, targetDir).replaceAll('\\', '/');
+    const prefix = relativePath ? `./${relativePath}/` : './';
+    for (const dir of [tmpDir, appDir]) {
+      fs.writeFileSync(
+        path.join(dir, 'package.json'),
+        JSON.stringify({
+          name: dir === tmpDir ? 'root' : 'app',
+          devDependencies: { vite: '^8.0.0', oxlint: '^1.0.0', oxfmt: '^0.40.0' },
+          scripts: {
+            lint:
+              kind === 'script' && dir === consumerDir
+                ? `oxlint -c ${prefix}.oxlintrc.json index.js`
+                : 'oxlint index.js',
+            fmt:
+              kind === 'script' && dir === consumerDir
+                ? `oxfmt --config=${prefix}.oxfmtrc.json index.js`
+                : 'oxfmt index.js',
+          },
+        }),
+      );
+      fs.writeFileSync(path.join(dir, 'vite.config.mjs'), 'export default {};\n');
+      fs.writeFileSync(path.join(dir, '.oxfmtrc.json'), '{"singleQuote":true}\n');
+      fs.writeFileSync(
+        path.join(dir, '.oxlintrc.json'),
+        JSON.stringify({ rules: { [dir === targetDir ? 'no-debugger' : 'no-console']: 'error' } }),
+      );
+    }
+    if (kind === 'module') {
+      fs.writeFileSync(
+        path.join(consumerDir, 'vite.config.mjs'),
+        `import lintRules from '${prefix}.oxlintrc.json' with { type: 'json' };\n` +
+          `import fmtRules from '${prefix}.oxfmtrc.json' with { type: 'json' };\n` +
+          'export default { define: { rules: JSON.stringify({ lintRules, fmtRules }) } };\n',
+      );
+    }
+    const workspaceInfo = {
+      ...makeWorkspaceInfo(tmpDir, PackageManager.npm),
+      isMonorepo: true,
+      packages: [{ name: 'app', path: 'packages/app' }],
+    };
+    rewriteMonorepo(workspaceInfo, true, true);
+
+    const config = fs.readFileSync(path.join(independentDir, 'vite.config.mjs'), 'utf8');
+    expect(config).toMatch(/"no-console":\s*"error"/);
+    expect(config).toContain('fmt:');
+    expect(config).toContain('"singleQuote":true');
+    for (const filename of ['.oxlintrc.json', '.oxfmtrc.json']) {
+      expect(fs.existsSync(path.join(independentDir, filename))).toBe(false);
+      expect(fs.existsSync(path.join(targetDir, filename))).toBe(true);
+    }
+    expect(readJson(path.join(appDir, 'package.json')).scripts).toMatchObject({
+      lint:
+        kind === 'script' && consumer === 'packages/app'
+          ? `vp lint -c ${prefix}.oxlintrc.json index.js`
+          : 'vp lint index.js',
+    });
+    expect(finalizeCoreMigrationForExistingVitePlus(workspaceInfo, true).oxcConfigs).toBe(false);
+    expect(fs.readFileSync(path.join(independentDir, 'vite.config.mjs'), 'utf8')).toBe(config);
+  });
+
+  it.each([
+    ['script', 'vp lint --config "$LINT_CONFIG"'],
+    ['script', 'node check-config.js .oxlintrc.json'],
+    ['module', "import shared from '#shared'; export default shared;"],
+    ['module', "const filename = '.oxlintrc.json'; export default { define: { filename } };"],
+  ])('scopes uncertain %s references to their package: %s', (kind, reference) => {
+    const appDir = path.join(tmpDir, 'packages/app');
+    fs.mkdirSync(appDir, { recursive: true });
+    for (const dir of [tmpDir, appDir]) {
+      fs.writeFileSync(
+        path.join(dir, 'package.json'),
+        JSON.stringify({
+          name: 'test',
+          scripts: kind === 'script' && dir === tmpDir ? { lint: reference } : {},
+        }),
+      );
+      fs.writeFileSync(path.join(dir, '.oxlintrc.json'), '{"rules":{"no-console":"error"}}\n');
+      fs.writeFileSync(
+        path.join(dir, 'vite.config.ts'),
+        kind === 'module' && dir === tmpDir ? reference : 'export default {};\n',
+      );
+    }
+    const workspaceInfo = {
+      ...makeWorkspaceInfo(tmpDir, PackageManager.pnpm),
+      packages: [{ name: 'app', path: 'packages/app' }],
+    };
+    expect(finalizeCoreMigrationForExistingVitePlus(workspaceInfo, true).oxcConfigs).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, '.oxlintrc.json'))).toBe(true);
+    expect(fs.existsSync(path.join(appDir, '.oxlintrc.json'))).toBe(false);
+    expect(fs.readFileSync(path.join(appDir, 'vite.config.ts'), 'utf8')).toMatch(
+      /"no-console":\s*"error"/,
+    );
+  });
+
+  it.each([
     '--config "config files/lint.jsonc"',
     "-c 'config files/lint.jsonc'",
     '--config="config files/lint.jsonc"',

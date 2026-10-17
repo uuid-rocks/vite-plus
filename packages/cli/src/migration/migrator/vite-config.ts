@@ -308,23 +308,33 @@ export function mergeViteConfigFiles(
     projectPath,
     ...(packages ?? []).map((pkg) => path.join(rootDir, pkg.path)),
   ]);
-  const configReferences: string[] = [];
+  const projectDirectories = [...projectPaths]
+    .filter((directory) => fs.existsSync(directory))
+    .map((directory) => fs.realpathSync(directory))
+    .toSorted((left, right) => right.length - left.length);
+  // A helper module belongs to its nearest workspace package. Uncertain paths
+  // there must not prevent unrelated packages from migrating their own configs.
+  const referenceDirectory = (directory: string): string =>
+    projectDirectories.find(
+      (project) => directory === project || directory.startsWith(project + path.sep),
+    ) ?? directory;
+  const configReferences: { directory: string; content: string }[] = [];
   const lintConfigPaths = new Set<string>();
   const preservedConfigs = new Set<string>();
   const modulePaths = new Set<string>();
-  let unresolvedConfigReference = false;
-  for (const projectDir of projectPaths) {
-    const packageJsonPath = path.join(projectDir, 'package.json');
+  const unresolvedConfigDirectories = new Set<string>();
+  for (const directory of projectDirectories) {
+    const packageJsonPath = path.join(directory, 'package.json');
     if (fs.existsSync(packageJsonPath)) {
       const pkg = readJsonFile(packageJsonPath) as { scripts?: Record<string, string> };
       for (const script of Object.values(pkg.scripts ?? {})) {
-        configReferences.push(script);
         // Inspect config arguments without executing shell commands. An unknown
         // path (for example an environment variable or a preceding `cd`) means
         // we cannot safely decide that a standalone config is unused.
         const words = (script.match(/(?:[^\s"';&|]+|"[^"]*"|'[^']*')+/g) ?? []).map((word) =>
           word.replace(/(["'])(.*?)\1/g, '$2'),
         );
+        const changesDirectory = words.includes('cd');
         for (let index = 0; index < words.length; index++) {
           const word = words[index];
           let reference: string;
@@ -337,9 +347,13 @@ export function mergeViteConfigFiles(
           } else {
             continue;
           }
-          const filenames = resolveConfigReferences(projectDir, reference);
-          if (!filenames?.length || words.includes('cd')) {
-            unresolvedConfigReference = true;
+          const filenames = resolveConfigReferences(directory, reference);
+          if (!filenames?.length || changesDirectory) {
+            unresolvedConfigDirectories.add(directory);
+          } else {
+            // Known references are matched by file identity below. Do not let
+            // their basenames also preserve a different config in this package.
+            words[index] = '';
           }
           for (const filename of filenames ?? []) {
             if (/\.jsonc?$/.test(filename)) {
@@ -348,41 +362,47 @@ export function mergeViteConfigFiles(
             } else if (CONFIG_MODULE_EXTENSIONS.includes(path.extname(filename))) {
               modulePaths.add(filename);
             } else {
-              unresolvedConfigReference = true;
+              unresolvedConfigDirectories.add(directory);
             }
           }
         }
+        configReferences.push({ directory, content: words.join(' ') });
       }
     }
-    const projectConfigs = detectConfigs(projectDir);
+    const projectConfigs = detectConfigs(directory);
     if (projectConfigs.viteConfig) {
-      modulePaths.add(fs.realpathSync(path.join(projectDir, projectConfigs.viteConfig)));
+      modulePaths.add(fs.realpathSync(path.join(directory, projectConfigs.viteConfig)));
     }
     if (projectConfigs.oxlintConfig) {
-      lintConfigPaths.add(fs.realpathSync(path.join(projectDir, projectConfigs.oxlintConfig)));
+      lintConfigPaths.add(fs.realpathSync(path.join(directory, projectConfigs.oxlintConfig)));
     }
   }
   for (const modulePath of modulePaths) {
     const content = fs.readFileSync(modulePath, 'utf8');
-    configReferences.push(content);
+    const directory = referenceDirectory(path.dirname(modulePath));
     // Quoted paths and package aliases cover imports, re-exports, require(),
     // dynamic import(), and readFileSync/new URL calls, including comments
     // between tokens. Extra matches only preserve more configs.
     // Canonical paths keep cycles, including symlink cycles, finite.
-    for (const match of content.matchAll(/(["'`])((?:\.{1,2}\/|\/|#)[^"'`\r\n]+)\1/g)) {
-      const filenames = resolveConfigReferences(path.dirname(modulePath), match[2]);
-      if (!filenames) {
-        unresolvedConfigReference = true;
-      }
-      for (const filename of filenames ?? []) {
-        if (/\.jsonc?$/.test(filename)) {
-          preservedConfigs.add(filename);
-          lintConfigPaths.add(filename);
-        } else if (CONFIG_MODULE_EXTENSIONS.includes(path.extname(filename))) {
-          modulePaths.add(filename);
+    const unresolvedContent = content.replace(
+      /(["'`])((?:\.{1,2}\/|\/|#)[^"'`\r\n]+)\1/g,
+      (match, _quote, reference: string) => {
+        const filenames = resolveConfigReferences(path.dirname(modulePath), reference);
+        if (!filenames) {
+          unresolvedConfigDirectories.add(directory);
         }
-      }
-    }
+        for (const filename of filenames ?? []) {
+          if (/\.jsonc?$/.test(filename)) {
+            preservedConfigs.add(filename);
+            lintConfigPaths.add(filename);
+          } else if (CONFIG_MODULE_EXTENSIONS.includes(path.extname(filename))) {
+            modulePaths.add(filename);
+          }
+        }
+        return filenames?.length ? '' : match;
+      },
+    );
+    configReferences.push({ directory, content: unresolvedContent });
   }
   // Set iteration also visits newly discovered targets, once each, including
   // custom filenames. This follows transitive extends without looping on cycles.
@@ -419,13 +439,16 @@ export function mergeViteConfigFiles(
   const canMergeConfig = (filename: string, configKey: string): boolean => {
     // An existing tool config can load the JSON file indirectly. Direct imports,
     // readFileSync calls, and package scripts can also use it without a tool key.
-    // Keep these files intact, including their lint options. A filename match is
-    // deliberately conservative because script paths can depend on shell state.
+    // Keep these files intact, including their lint options. Only unresolved
+    // text in the referring package needs the conservative filename fallback.
+    const directory = fs.realpathSync(projectPath);
     return (
-      !unresolvedConfigReference &&
+      !unresolvedConfigDirectories.has(directory) &&
       (!fullViteConfigPath || !hasConfigKey(fullViteConfigPath, configKey)) &&
       !preservedConfigs.has(fs.realpathSync(path.join(projectPath, filename))) &&
-      !configReferences.some((content) => content.includes(filename))
+      !configReferences.some(
+        (reference) => reference.directory === directory && reference.content.includes(filename),
+      )
     );
   };
   if (configs.oxlintConfig && !canMergeConfig(configs.oxlintConfig, 'lint')) {
