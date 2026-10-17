@@ -99,6 +99,7 @@ Finished in <duration> on 1 file with <n> rules using <n> threads.
 ```
 VITE+ - The Unified Toolchain for the Web
 
+▲ No package manager is declared in package.json; using pnpm for this migration without adding a pin. Run `vp env pin` to declare it explicitly.
 This project is already using Vite+! Happy coding!
 ```
 

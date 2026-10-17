@@ -246,7 +246,12 @@ const CONFIG_SOURCE_EXTENSIONS: Record<string, string[]> = {
   '.jsx': ['.tsx'],
 };
 
-function resolveConfigReferences(directory: string, reference: string): string[] {
+function resolveConfigReferences(directory: string, reference: string): string[] | undefined {
+  // Package imports can select different modules for different loaders or
+  // conditions. An unresolved reference must never authorize deleting a config.
+  if (reference.startsWith('#')) {
+    return undefined;
+  }
   if (!reference) {
     return [];
   }
@@ -265,8 +270,14 @@ function resolveConfigReferences(directory: string, reference: string): string[]
   // config loader's extension precedence when multiple candidates exist.
   const resolved = new Set<string>();
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-      resolved.add(fs.realpathSync(candidate));
+    if (fs.existsSync(candidate)) {
+      if (fs.statSync(candidate).isFile()) {
+        resolved.add(fs.realpathSync(candidate));
+      } else if (fs.existsSync(path.join(candidate, 'package.json'))) {
+        // A directory's main/module/exports fields can supersede its index.
+        // Keep the configs even if another candidate above was found.
+        return undefined;
+      }
     }
   }
   return [...resolved];
@@ -301,7 +312,7 @@ export function mergeViteConfigFiles(
   const lintConfigPaths = new Set<string>();
   const preservedConfigs = new Set<string>();
   const modulePaths = new Set<string>();
-  let unresolvedScriptConfig = false;
+  let unresolvedConfigReference = false;
   for (const projectDir of projectPaths) {
     const packageJsonPath = path.join(projectDir, 'package.json');
     if (fs.existsSync(packageJsonPath)) {
@@ -327,17 +338,17 @@ export function mergeViteConfigFiles(
             continue;
           }
           const filenames = resolveConfigReferences(projectDir, reference);
-          if (filenames.length === 0 || words.includes('cd')) {
-            unresolvedScriptConfig = true;
+          if (!filenames?.length || words.includes('cd')) {
+            unresolvedConfigReference = true;
           }
-          for (const filename of filenames) {
+          for (const filename of filenames ?? []) {
             if (/\.jsonc?$/.test(filename)) {
               preservedConfigs.add(filename);
               lintConfigPaths.add(filename);
             } else if (CONFIG_MODULE_EXTENSIONS.includes(path.extname(filename))) {
               modulePaths.add(filename);
             } else {
-              unresolvedScriptConfig = true;
+              unresolvedConfigReference = true;
             }
           }
         }
@@ -354,11 +365,16 @@ export function mergeViteConfigFiles(
   for (const modulePath of modulePaths) {
     const content = fs.readFileSync(modulePath, 'utf8');
     configReferences.push(content);
-    // Quoted local paths cover imports, re-exports, require(), dynamic import(),
-    // and readFileSync/new URL calls. Extra matches only preserve more configs.
+    // Quoted paths and package aliases cover imports, re-exports, require(),
+    // dynamic import(), and readFileSync/new URL calls, including comments
+    // between tokens. Extra matches only preserve more configs.
     // Canonical paths keep cycles, including symlink cycles, finite.
-    for (const match of content.matchAll(/(["'`])((?:\.{1,2}\/|\/)[^"'`\r\n]+)\1/g)) {
-      for (const filename of resolveConfigReferences(path.dirname(modulePath), match[2])) {
+    for (const match of content.matchAll(/(["'`])((?:\.{1,2}\/|\/|#)[^"'`\r\n]+)\1/g)) {
+      const filenames = resolveConfigReferences(path.dirname(modulePath), match[2]);
+      if (!filenames) {
+        unresolvedConfigReference = true;
+      }
+      for (const filename of filenames ?? []) {
         if (/\.jsonc?$/.test(filename)) {
           preservedConfigs.add(filename);
           lintConfigPaths.add(filename);
@@ -379,6 +395,15 @@ export function mergeViteConfigFiles(
       // JSON extends uses file paths; inline lint.extends requires config objects.
       // Keep both the extending config and every config in its inheritance chain.
       preservedConfigs.add(lintConfigPath);
+      if (
+        configs.oxlintConfig &&
+        lintConfigPath === fs.realpathSync(path.join(projectPath, configs.oxlintConfig))
+      ) {
+        warnMigration(
+          `Kept ${displayRelative(lintConfigPath)} because JSON extends paths cannot be merged into vite.config.ts. Use vp lint -c ${JSON.stringify(displayRelative(lintConfigPath))}, or migrate its extends entries to config objects manually.`,
+          report,
+        );
+      }
       for (const extendedConfig of json.extends) {
         if (typeof extendedConfig === 'string') {
           const resolvedPath = path.resolve(path.dirname(lintConfigPath), extendedConfig);
@@ -397,7 +422,7 @@ export function mergeViteConfigFiles(
     // Keep these files intact, including their lint options. A filename match is
     // deliberately conservative because script paths can depend on shell state.
     return (
-      !unresolvedScriptConfig &&
+      !unresolvedConfigReference &&
       (!fullViteConfigPath || !hasConfigKey(fullViteConfigPath, configKey)) &&
       !preservedConfigs.has(fs.realpathSync(path.join(projectPath, filename))) &&
       !configReferences.some((content) => content.includes(filename))

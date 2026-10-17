@@ -26,6 +26,8 @@ VITE+ - The Unified Toolchain for the Web
     vite              → <version>
 • 1 config update applied
 • Package manager settings configured
+! Warnings:
+  - Kept .oxlintrc.json because JSON extends paths cannot be merged into vite.config.ts. Use vp lint -c ".oxlintrc.json", or migrate its extends entries to config objects manually.
 ```
 
 ## `vpt print-file .oxlintrc.json`

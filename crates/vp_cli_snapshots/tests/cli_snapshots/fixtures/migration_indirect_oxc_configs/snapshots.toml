@@ -34,3 +34,44 @@ steps = [
   { argv = ["vpt", "write-file", "src/index.js", "console.log('hello')\n"], snapshot = false },
   { argv = ["vp", "lint", "src/index.js"], comment = "the indirectly imported lint rule remains active after two migrations", continue-on-failure = true },
 ]
+
+[[case]]
+name = "migration_package_import_alias"
+vp = "global"
+steps = [
+  { argv = ["vpt", "write-file", "package.json", "{\"name\":\"migration-shared-vite-config\",\"type\":\"module\",\"imports\":{\"#shared\":{\"import\":\"./config/shared.ts\",\"require\":\"./config/unused.cjs\"}},\"devDependencies\":{\"vite-plus\":\"latest\"}}\n"], snapshot = false },
+  { argv = ["vpt", "write-file", "vite.config.ts", "import shared from '#shared';\nexport default { ...shared };\n"], snapshot = false },
+  ["vp", "fmt", "--check", "src/index.js"],
+  ["vp", "lint", "src/index.js"],
+  ["vp", "migrate", "--no-interactive", "--no-hooks", "--no-agent", "--no-editor"],
+  ["vpt", "print-file", ".oxfmtrc.json"],
+  ["vpt", "print-file", ".oxlintrc.json"],
+  ["vpt", "print-file", "vite.config.ts"],
+  { argv = ["vp", "fmt", "--check", "src/index.js"], comment = "the package import alias must still load its JSON configs" },
+  ["vp", "lint", "src/index.js"],
+  ["vp", "migrate", "--no-interactive", "--no-hooks", "--no-agent", "--no-editor"],
+  ["vp", "fmt", "--check", "src/index.js"],
+  { argv = ["vpt", "write-file", "src/index.js", "console.log('hello')\n"], snapshot = false },
+  { argv = ["vp", "lint", "src/index.js"], comment = "the indirectly imported lint rule remains active after two migrations", continue-on-failure = true },
+]
+
+[[case]]
+name = "migration_directory_package_import"
+vp = "global"
+steps = [
+  { argv = ["vpt", "write-file", "package.json", "{\"name\":\"migration-shared-vite-config\",\"devDependencies\":{\"vite-plus\":\"latest\"}}\n"], snapshot = false },
+  { argv = ["vpt", "write-file", "vite.config.ts", "import shared from './config';\nexport default { ...shared };\n"], snapshot = false },
+  { argv = ["vpt", "write-file", "config/package.json", "{\"type\":\"module\",\"main\":\"./shared.ts\"}\n"], snapshot = false },
+  ["vp", "fmt", "--check", "src/index.js"],
+  ["vp", "lint", "src/index.js"],
+  ["vp", "migrate", "--no-interactive", "--no-hooks", "--no-agent", "--no-editor"],
+  ["vpt", "print-file", ".oxfmtrc.json"],
+  ["vpt", "print-file", ".oxlintrc.json"],
+  ["vpt", "print-file", "vite.config.ts"],
+  { argv = ["vp", "fmt", "--check", "src/index.js"], comment = "the directory package entry must still load its JSON configs" },
+  ["vp", "lint", "src/index.js"],
+  ["vp", "migrate", "--no-interactive", "--no-hooks", "--no-agent", "--no-editor"],
+  ["vp", "fmt", "--check", "src/index.js"],
+  { argv = ["vpt", "write-file", "src/index.js", "console.log('hello')\n"], snapshot = false },
+  { argv = ["vp", "lint", "src/index.js"], comment = "the indirectly imported lint rule remains active after two migrations", continue-on-failure = true },
+]

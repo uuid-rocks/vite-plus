@@ -13,6 +13,9 @@ VITE+ - The Unified Toolchain for the Web
     vite-plus  latest → <version>
     vite              → <version>
 • Package manager settings configured
+! Warnings:
+  - Kept apps/sigle/.oxlintrc.json because JSON extends paths cannot be merged into vite.config.ts. Use vp lint -c "apps/sigle/.oxlintrc.json", or migrate its extends entries to config objects manually.
+  - Kept apps/custom-domain/.oxlintrc.json because JSON extends paths cannot be merged into vite.config.ts. Use vp lint -c "apps/custom-domain/.oxlintrc.json", or migrate its extends entries to config objects manually.
 ```
 
 ## `vpt print-file .oxlintrc.json`
@@ -92,7 +95,13 @@ Finished in <duration> on 1 file with <n> rules using <n> threads.
 ```
 VITE+ - The Unified Toolchain for the Web
 
-This project is already using Vite+! Happy coding!
+◇ Updated . to Vite+ <version>
+• Node <version>  pnpm <version>
+• Dependencies:
+    vite   → <version>
+! Warnings:
+  - Kept apps/sigle/.oxlintrc.json because JSON extends paths cannot be merged into vite.config.ts. Use vp lint -c "apps/sigle/.oxlintrc.json", or migrate its extends entries to config objects manually.
+  - Kept apps/custom-domain/.oxlintrc.json because JSON extends paths cannot be merged into vite.config.ts. Use vp lint -c "apps/custom-domain/.oxlintrc.json", or migrate its extends entries to config objects manually.
 ```
 
 ## `vpt print-file apps/sigle/vite.config.ts`

@@ -8826,6 +8826,7 @@ describe('existing Vite+ core migration finalization', () => {
       scripts: true,
       tsconfigTypes: true,
       imports: true,
+      oxcConfigs: false,
       tsdownConfig: false,
       taskCacheConfig: false,
       taskCacheWarnings: [],
@@ -9158,6 +9159,79 @@ export default { fmt, lint };
     }
   });
 
+  it.each([
+    "import shared from '#shared'; export default shared;",
+    "import shared from /* shared config */ '#shared'; export default shared;",
+    "export { default } from '#shared';",
+    "const shared = require('#shared'); export default shared;",
+    "const shared = await import(/* shared config */ '#shared'); export default shared.default;",
+  ])('preserves configs behind a package alias: %s', (entry) => {
+    fs.writeFileSync(
+      path.join(tmpDir, 'package.json'),
+      JSON.stringify({
+        name: 'root',
+        imports: { '#shared': { import: './shared.ts', require: './unused.cjs' } },
+      }),
+    );
+    fs.writeFileSync(path.join(tmpDir, 'unused.cjs'), 'module.exports = {};\n');
+    fs.writeFileSync(path.join(tmpDir, 'entry.ts'), entry);
+    const config = "import shared from './entry.ts';\nexport default { ...shared };\n";
+    fs.writeFileSync(path.join(tmpDir, 'vite.config.ts'), config);
+    fs.writeFileSync(
+      path.join(tmpDir, 'shared.ts'),
+      "import fmt from './.oxfmtrc.json'; import lint from './.oxlintrc.json'; export default { fmt, lint };\n",
+    );
+    const lint = '{"rules":{"no-console":"error"}}\n';
+    const fmt = '{"singleQuote":true}\n';
+    fs.writeFileSync(path.join(tmpDir, '.oxlintrc.json'), lint);
+    fs.writeFileSync(path.join(tmpDir, '.oxfmtrc.json'), fmt);
+
+    for (let run = 0; run < 2; run++) {
+      expect(
+        finalizeCoreMigrationForExistingVitePlus(
+          makeWorkspaceInfo(tmpDir, PackageManager.npm),
+          true,
+        ).oxcConfigs,
+      ).toBe(false);
+      expect(fs.readFileSync(path.join(tmpDir, '.oxlintrc.json'), 'utf8')).toBe(lint);
+      expect(fs.readFileSync(path.join(tmpDir, '.oxfmtrc.json'), 'utf8')).toBe(fmt);
+      expect(fs.readFileSync(path.join(tmpDir, 'vite.config.ts'), 'utf8')).toBe(config);
+    }
+  });
+
+  it.each(['main', 'module', 'exports'])(
+    'preserves configs behind a directory package with a %s entry',
+    (field) => {
+      fs.mkdirSync(path.join(tmpDir, 'config'));
+      fs.writeFileSync(path.join(tmpDir, 'package.json'), '{"name":"root"}\n');
+      fs.writeFileSync(
+        path.join(tmpDir, 'config/package.json'),
+        JSON.stringify({ [field]: './shared.ts' }),
+      );
+      // Finding an index is not enough: package metadata can select another file.
+      fs.writeFileSync(path.join(tmpDir, 'config/index.ts'), 'export default {};\n');
+      fs.writeFileSync(
+        path.join(tmpDir, 'config/shared.ts'),
+        "import fmt from '../.oxfmtrc.json'; export default { fmt };\n",
+      );
+      const config = "import shared from './config';\nexport default { ...shared };\n";
+      const fmt = '{"singleQuote":true}\n';
+      fs.writeFileSync(path.join(tmpDir, 'vite.config.ts'), config);
+      fs.writeFileSync(path.join(tmpDir, '.oxfmtrc.json'), fmt);
+
+      for (let run = 0; run < 2; run++) {
+        expect(
+          finalizeCoreMigrationForExistingVitePlus(
+            makeWorkspaceInfo(tmpDir, PackageManager.npm),
+            true,
+          ).oxcConfigs,
+        ).toBe(false);
+        expect(fs.readFileSync(path.join(tmpDir, '.oxfmtrc.json'), 'utf8')).toBe(fmt);
+        expect(fs.readFileSync(path.join(tmpDir, 'vite.config.ts'), 'utf8')).toBe(config);
+      }
+    },
+  );
+
   it('still merges unreferenced configs alongside custom config arguments and local imports', () => {
     fs.writeFileSync(
       path.join(tmpDir, 'package.json'),
@@ -9313,6 +9387,7 @@ export default defineConfig({
       scripts: false,
       tsconfigTypes: false,
       imports: true,
+      oxcConfigs: false,
       tsdownConfig: true,
       taskCacheConfig: false,
       taskCacheWarnings: [],
@@ -9332,6 +9407,7 @@ export default defineConfig({
       scripts: false,
       tsconfigTypes: false,
       imports: false,
+      oxcConfigs: false,
       tsdownConfig: false,
       taskCacheConfig: false,
       taskCacheWarnings: [],
@@ -9371,6 +9447,7 @@ export default defineConfig({ entry: 'src/index.ts' });
       scripts: false,
       tsconfigTypes: false,
       imports: true,
+      oxcConfigs: false,
       tsdownConfig: false,
       taskCacheConfig: false,
       taskCacheWarnings: [],
@@ -9601,6 +9678,54 @@ export default defineConfig({
     // The standalone file can still be used outside this config.
     expect(fs.existsSync(path.join(tmpDir, '.oxfmtrc.jsonc'))).toBe(true);
   });
+
+  it.each(['.oxlintrc.json', '.oxlintrc.jsonc'])(
+    'preserves JSON extends during a fresh migration and retry (%s, #3089)',
+    (filename) => {
+      fs.writeFileSync(
+        path.join(tmpDir, 'package.json'),
+        JSON.stringify({
+          name: 'test',
+          scripts: { lint: 'oxlint' },
+          devDependencies: { oxlint: '^1.88.0', vite: '^8.3.4' },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(tmpDir, 'vite.config.ts'),
+        "import { defineConfig } from 'vite';\nexport default defineConfig({});\n",
+      );
+      fs.mkdirSync(path.join(tmpDir, 'shared'));
+      const lint = '{"extends":["./shared/oxlint-config.json"]}\n';
+      const shared = '{"rules":{"no-debugger":"error"}}\n';
+      fs.writeFileSync(path.join(tmpDir, filename), lint);
+      fs.writeFileSync(path.join(tmpDir, 'shared/oxlint-config.json'), shared);
+      const workspaceInfo = makeWorkspaceInfo(tmpDir, PackageManager.npm);
+      const report = createMigrationReport();
+
+      rewriteStandaloneProject(tmpDir, workspaceInfo, true, true, report);
+
+      const config = fs.readFileSync(path.join(tmpDir, 'vite.config.ts'), 'utf8');
+      expect(config).toContain("from 'vite-plus'");
+      expect(config).not.toMatch(/\blint\s*:/);
+      expect(config).not.toContain('extends');
+      expect(fs.readFileSync(path.join(tmpDir, filename), 'utf8')).toBe(lint);
+      expect(fs.readFileSync(path.join(tmpDir, 'shared/oxlint-config.json'), 'utf8')).toBe(shared);
+      expect(
+        (readJson(path.join(tmpDir, 'package.json')).scripts as Record<string, string>).lint,
+      ).toBe('vp lint');
+      expect(report.warnings).toEqual([
+        expect.stringMatching(
+          /JSON extends paths cannot be merged into vite\.config\.ts\. Use vp lint -c/,
+        ),
+      ]);
+      expect(finalizeCoreMigrationForExistingVitePlus(workspaceInfo, true, report).oxcConfigs).toBe(
+        false,
+      );
+      expect(fs.readFileSync(path.join(tmpDir, 'vite.config.ts'), 'utf8')).toBe(config);
+      expect(fs.readFileSync(path.join(tmpDir, filename), 'utf8')).toBe(lint);
+      expect(report.warnings).toHaveLength(1);
+    },
+  );
 
   it('does not inject defaults over configs retained for explicit script arguments', () => {
     fs.writeFileSync(
