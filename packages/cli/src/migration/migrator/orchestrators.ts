@@ -37,6 +37,7 @@ import {
   projectUsesVitestDirectly,
   pruneLegacyWrapperAliases,
   removeLintStagedFromPackageJson,
+  removeMigratedOxlintConfigs,
   removeManagedVitestEntry,
   removeVitestPeerDependencyRule,
   rewriteAllImports,
@@ -493,6 +494,7 @@ export function rewriteMonorepo(
     workspaceInfo.rootDir,
     workspaceContext.oxlintConfigs,
   );
+  removeMigratedOxlintConfigs(workspaceContext.oxlintConfigs);
   injectLintTypeCheckDefaults(workspaceInfo.rootDir, silent, report);
   injectFmtDefaults(workspaceInfo.rootDir, silent, report);
   mergeTsdownConfigFile(workspaceInfo.rootDir, silent, report);
