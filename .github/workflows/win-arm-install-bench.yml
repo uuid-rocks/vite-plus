@@ -1,0 +1,164 @@
+# TEMPORARY benchmark: `vp install` for uuid-rocks/t3code on windows-11-arm.
+name: Win ARM install bench
+
+on:
+  push:
+    branches: [bench/win-arm-install]
+
+permissions:
+  contents: read
+
+env:
+  T3CODE_REF: 080ca4807633e0860cd69f2664aad8e961b40ef9
+  FILTERS: --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+
+jobs:
+  verify:
+    name: Lockfile verification record
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout t3code
+        run: |
+          git init .
+          git remote add origin https://github.com/uuid-rocks/t3code.git
+          git fetch --no-tags --depth=1 origin "$T3CODE_REF"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git checkout --detach FETCH_HEAD
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+      - name: Install
+        env:
+          pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-metadata
+        run: vp install --ignore-scripts $FILTERS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dependency-verification
+          path: ${{ runner.temp }}/pnpm-metadata/lockfile-verified.jsonl
+
+  bench:
+    name: ${{ matrix.variant }} #${{ matrix.sample }}
+    needs: [verify]
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [base, w8, w16, net128, pnpm11latest, pnpm12]
+        sample: [1, 2]
+    steps:
+      - name: Runner diagnostics
+        shell: pwsh
+        run: |
+          "default pwsh: $((Get-Command pwsh).Source) PROCESSOR_ARCHITECTURE=$env:PROCESSOR_ARCHITECTURE ProcessArch=$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture) OSArch=$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)"
+          "powershell.exe: " + (powershell -NoProfile -Command '$env:PROCESSOR_ARCHITECTURE')
+          Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors | Format-List
+          Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AMRunningMode | Format-List
+          "Exclusions: " + ((Get-MpPreference).ExclusionPath -join ', ')
+
+      - name: Move workspace to the local NVMe Dev Drive
+        shell: bash
+        run: |
+          set -euo pipefail
+          dp() { printf '%s\n' "$@" > "$RUNNER_TEMP/diskpart.txt"; diskpart //s "$(cygpath -w "$RUNNER_TEMP/diskpart.txt")"; }
+          disk=$(dp "list disk" | tr -d '\r' | awk '/^  Disk [0-9]+/ && $NF != "*" { print $2; exit }')
+          if [[ -z "$disk" ]]; then echo "No raw disk"; exit 1; fi
+          dp "select disk $disk" "convert gpt" "create partition primary" "assign letter=D"
+          cmd //c "echo Y| format D: /DevDrv /Q /V:Workspace"
+          fsutil devdrv trust D:
+          mountvol "$(cygpath -w "$GITHUB_WORKSPACE")" "$(mountvol D: //L | tr -d ' \r')"
+          echo "pnpm_config_store_dir=D:\\.pnpm-store" >> "$GITHUB_ENV"
+
+      - name: Exclude the Dev Drive from Defender
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath 'D:\', $env:GITHUB_WORKSPACE
+          "Exclusions: " + ((Get-MpPreference).ExclusionPath -join ', ')
+
+      - name: Use PowerShell 7.4 arm64
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="7.4.20"
+          archive="$RUNNER_TEMP/PowerShell-$version-win-arm64.zip"
+          install_dir="$RUNNER_TEMP/powershell-$version-arm64"
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://github.com/PowerShell/PowerShell/releases/download/v$version/PowerShell-$version-win-arm64.zip"
+          echo "67eff749d5dae357501c95a3eec1dcd93f669824e3ca2b1d2adcdecdebf04f35  $archive" | sha256sum -c -
+          mkdir -p "$install_dir"
+          /c/Windows/System32/tar.exe -xf "$(cygpath -w "$archive")" -C "$(cygpath -w "$install_dir")"
+          cygpath -w "$install_dir" >> "$GITHUB_PATH"
+
+      - name: Checkout t3code
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin https://github.com/uuid-rocks/t3code.git
+          git fetch --no-tags --depth=1 origin "$T3CODE_REF"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c checkout.workers=0 checkout --detach FETCH_HEAD
+
+      - name: Apply variant
+        shell: bash
+        env:
+          VARIANT: ${{ matrix.variant }}
+          PATCH_BASE: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/bench/win-arm
+        run: |
+          set -euo pipefail
+          case "$VARIANT" in
+            base) ;;
+            w8) echo "PNPM_MAX_WORKERS=8" >> "$GITHUB_ENV" ;;
+            w16) echo "PNPM_MAX_WORKERS=16" >> "$GITHUB_ENV" ;;
+            net128) echo "pnpm_config_network_concurrency=128" >> "$GITHUB_ENV" ;;
+            pnpm11latest) sed -i 's/"packageManager": "pnpm@11.10.0"/"packageManager": "pnpm@11.28.6"/' package.json ;;
+            pnpm12) curl -fsSL "$PATCH_BASE/pnpm12.patch" | git apply ;;
+            *) echo "unknown variant $VARIANT"; exit 1 ;;
+          esac
+          git status --short
+          grep packageManager package.json
+
+      - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: false
+
+      - name: Toolchain diagnostics and pnpm warm-up
+        shell: pwsh
+        run: |
+          function Get-PEMachine($path) {
+            $fs = [IO.File]::OpenRead($path); try { $b = New-Object byte[] 4096; [void]$fs.Read($b, 0, 4096) } finally { $fs.Close() }
+            $o = [BitConverter]::ToInt32($b, 0x3c); '{0:X4}' -f [BitConverter]::ToUInt16($b, $o + 4)
+          }
+          $vp = (Get-Command vp).Source
+          "vp: $vp machine=$(Get-PEMachine $vp)  (AA64=arm64, 8664=x64)"
+          $node = node -p "process.execPath"
+          "node: $node machine=$(Get-PEMachine $node) " + (node -p "process.arch + ' v' + process.versions.node + ' cpus=' + require('os').availableParallelism()")
+          pnpm --version
+          vp --version
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: dependency-verification
+          path: ${{ runner.temp }}/pnpm-metadata
+
+      - name: Install
+        shell: pwsh
+        env:
+          pnpm_config_cache_dir: ${{ runner.temp }}/pnpm-metadata
+        run: |
+          $perf = Join-Path $env:RUNNER_TEMP perf.csv
+          $tp = Start-Process typeperf -ArgumentList '"\Processor(_Total)\% Processor Time"', '"\PhysicalDisk(_Total)\% Idle Time"', '"\Network Interface(*)\Bytes Received/sec"', '-si', '1', '-o', $perf, '-y' -PassThru -WindowStyle Hidden
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          vp install $env:FILTERS.Split(' ')
+          $code = $LASTEXITCODE
+          $sw.Stop()
+          Stop-Process -Id $tp.Id -ErrorAction SilentlyContinue
+          $secs = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+          "BENCH variant=${{ matrix.variant }} sample=${{ matrix.sample }} install_seconds=$secs exit=$code"
+          "| ${{ matrix.variant }} | ${{ matrix.sample }} | $secs |" >> $env:GITHUB_STEP_SUMMARY
+          if (Test-Path $perf) { Get-Content $perf }
+          exit $code
