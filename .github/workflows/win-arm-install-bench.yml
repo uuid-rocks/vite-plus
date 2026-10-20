@@ -10,12 +10,16 @@ permissions:
 
 env:
   T3CODE_REF: 080ca4807633e0860cd69f2664aad8e961b40ef9
+  PATCH_BASE: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/bench/win-arm
   FILTERS: --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
 
 jobs:
   verify:
-    name: Lockfile verification record
+    name: "verify ${{ matrix.variant }}"
     runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        variant: [base, pnpm11latest, pnpm12]
     steps:
       - name: Checkout t3code
         run: |
@@ -24,6 +28,8 @@ jobs:
           git fetch --no-tags --depth=1 origin "$T3CODE_REF"
           git sparse-checkout set --no-cone '/*' '!/.repos/'
           git checkout --detach FETCH_HEAD
+      - name: Apply variant
+        run: curl -fsSL "$PATCH_BASE/apply-variant.sh" | bash -s -- "${{ matrix.variant }}" "$PATCH_BASE"
       - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
         with:
           node-version-file: package.json
@@ -35,11 +41,11 @@ jobs:
         run: vp install --ignore-scripts $FILTERS
       - uses: actions/upload-artifact@v7
         with:
-          name: dependency-verification
+          name: dependency-verification-${{ matrix.variant }}
           path: ${{ runner.temp }}/pnpm-metadata/lockfile-verified.jsonl
 
   bench:
-    name: ${{ matrix.variant }} #${{ matrix.sample }}
+    name: "${{ matrix.variant }} #${{ matrix.sample }}"
     needs: [verify]
     runs-on: windows-11-arm
     timeout-minutes: 30
@@ -67,14 +73,18 @@ jobs:
           if [[ -z "$disk" ]]; then echo "No raw disk"; exit 1; fi
           dp "select disk $disk" "convert gpt" "create partition primary" "assign letter=D"
           cmd //c "echo Y| format D: /DevDrv /Q /V:Workspace"
-          fsutil devdrv trust D:
-          mountvol "$(cygpath -w "$GITHUB_WORKSPACE")" "$(mountvol D: //L | tr -d ' \r')"
-          echo "pnpm_config_store_dir=D:\\.pnpm-store" >> "$GITHUB_ENV"
+          vol=$(mountvol D: //L | tr -d ' \r')
+          # With a drive letter and a folder mount on the same volume, pnpm 11.10 installed nothing.
+          mountvol D: //D
+          ws=$(cygpath -w "$GITHUB_WORKSPACE")
+          mountvol "$ws" "$vol"
+          fsutil devdrv trust "$ws"
+          echo "pnpm_config_store_dir=$ws\.pnpm-store" >> "$GITHUB_ENV"
 
       - name: Exclude the Dev Drive from Defender
         shell: pwsh
         run: |
-          Add-MpPreference -ExclusionPath 'D:\', $env:GITHUB_WORKSPACE
+          Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE
           "Exclusions: " + ((Get-MpPreference).ExclusionPath -join ', ')
 
       - name: Use PowerShell 7.4 arm64
@@ -103,22 +113,7 @@ jobs:
 
       - name: Apply variant
         shell: bash
-        env:
-          VARIANT: ${{ matrix.variant }}
-          PATCH_BASE: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/bench/win-arm
-        run: |
-          set -euo pipefail
-          case "$VARIANT" in
-            base) ;;
-            w8) echo "PNPM_MAX_WORKERS=8" >> "$GITHUB_ENV" ;;
-            w16) echo "PNPM_MAX_WORKERS=16" >> "$GITHUB_ENV" ;;
-            net128) echo "pnpm_config_network_concurrency=128" >> "$GITHUB_ENV" ;;
-            pnpm11latest) sed -i 's/"packageManager": "pnpm@11.10.0"/"packageManager": "pnpm@11.28.6"/' package.json ;;
-            pnpm12) curl -fsSL "$PATCH_BASE/pnpm12.patch" | git apply ;;
-            *) echo "unknown variant $VARIANT"; exit 1 ;;
-          esac
-          git status --short
-          grep packageManager package.json
+        run: curl -fsSL "$PATCH_BASE/apply-variant.sh" | bash -s -- "${{ matrix.variant }}" "$PATCH_BASE"
 
       - uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
         with:
@@ -141,8 +136,9 @@ jobs:
           vp --version
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        continue-on-error: true
         with:
-          name: dependency-verification
+          name: dependency-verification-${{ (matrix.variant == 'pnpm11latest' || matrix.variant == 'pnpm12') && matrix.variant || 'base' }}
           path: ${{ runner.temp }}/pnpm-metadata
 
       - name: Install
