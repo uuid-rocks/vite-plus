@@ -4,8 +4,8 @@ set -euo pipefail
 variant=$1
 base_url=$2
 case "$variant" in
-  base | w8 | w16 | net128 | copy | profile) ;;
-  nolinux) sed -i -e 's/^  libc: \[current, glibc\]$/  libc: [current]/' -e 's/^  os: \[current, linux\]$/  os: [current]/' pnpm-workspace.yaml ;;
+  base | ntfs | w8 | w16 | net128 | copy | profile) ;;
+  nolinux | ntfsnolinux) sed -i -e 's/^  libc: \[current, glibc\]$/  libc: [current]/' -e 's/^  os: \[current, linux\]$/  os: [current]/' pnpm-workspace.yaml ;;
   nativeonly) sed -i '/^supportedArchitectures:/,/^  os:/d' pnpm-workspace.yaml ;;
   pnpm11latest) sed -i 's/"packageManager": "pnpm@11.10.0"/"packageManager": "pnpm@11.28.6"/' package.json ;;
   pnpm12) curl -fsSL "$base_url/pnpm12.patch" | git apply ;;

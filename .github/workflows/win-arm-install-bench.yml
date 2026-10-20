@@ -52,8 +52,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [base, nolinux]
-        sample: [1, 2, 3, 4, 5, 6]
+        variant: [base, ntfs, ntfsnolinux]
+        sample: [1, 2, 3, 4]
     steps:
       - name: Runner diagnostics
         shell: pwsh
@@ -66,14 +66,21 @@ jobs:
 
       - name: Move workspace to the local NVMe Dev Drive
         shell: bash
+        env:
+          VARIANT: ${{ matrix.variant }}
         run: |
           set -euo pipefail
           dp() { printf '%s\n' "$@" > "$RUNNER_TEMP/diskpart.txt"; diskpart //s "$(cygpath -w "$RUNNER_TEMP/diskpart.txt")"; }
           disk=$(dp "list disk" | tr -d '\r' | awk '/^  Disk [0-9]+/ && $NF != "*" { print $2; exit }')
           if [[ -z "$disk" ]]; then echo "No raw disk"; exit 1; fi
           dp "select disk $disk" "convert gpt" "create partition primary" "assign letter=D"
-          cmd //c "echo Y| format D: /DevDrv /Q /V:Workspace"
-          fsutil devdrv trust D:
+          if [[ "$VARIANT" == ntfs* ]]; then
+            cmd //c "echo Y| format D: /FS:NTFS /Q /V:Workspace"
+          else
+            cmd //c "echo Y| format D: /DevDrv /Q /V:Workspace"
+            fsutil devdrv trust D:
+          fi
+          fsutil fsinfo volumeinfo D: | grep -i "file system name" || true
           vol=$(mountvol D: //L | tr -d ' \r')
           # With a drive letter and a folder mount on the same volume, pnpm 11.10 installed nothing.
           mountvol D: //D
