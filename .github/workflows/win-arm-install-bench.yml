@@ -52,8 +52,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [base, nolinux, nativeonly, copy, pnpm11latest]
-        sample: [1, 2, 3]
+        variant: [profile]
+        sample: [1]
     steps:
       - name: Runner diagnostics
         shell: pwsh
@@ -141,6 +141,14 @@ jobs:
           name: dependency-verification-${{ (matrix.variant == 'pnpm11latest' || matrix.variant == 'pnpm12') && matrix.variant || 'base' }}
           path: ${{ runner.temp }}/pnpm-metadata
 
+      - name: Primitive throughput
+        if: matrix.variant == 'profile'
+        shell: pwsh
+        run: |
+          $env:NODE_OPTIONS = ''
+          Invoke-WebRequest "$env:PATCH_BASE/micro.mjs" -OutFile "$env:RUNNER_TEMP\micro.mjs"
+          node "$env:RUNNER_TEMP\micro.mjs" "$env:GITHUB_WORKSPACE\.micro"
+
       - name: Install
         shell: pwsh
         env:
@@ -148,6 +156,7 @@ jobs:
         run: |
           $perf = Join-Path $env:RUNNER_TEMP perf.csv
           $tp = Start-Process typeperf -ArgumentList '"\Processor(_Total)\% Processor Time"', '"\PhysicalDisk(_Total)\% Idle Time"', '"\Network Interface(*)\Bytes Received/sec"', '-si', '1', '-o', $perf, '-y' -PassThru -WindowStyle Hidden
+          if ($env:BENCH_NODE_OPTIONS) { $env:NODE_OPTIONS = $env:BENCH_NODE_OPTIONS }
           $sw = [Diagnostics.Stopwatch]::StartNew()
           vp install $env:FILTERS.Split(' ')
           $code = $LASTEXITCODE
@@ -158,3 +167,24 @@ jobs:
           "| ${{ matrix.variant }} | ${{ matrix.sample }} | $secs |" >> $env:GITHUB_STEP_SUMMARY
           if (Test-Path $perf) { Get-Content $perf }
           exit $code
+
+      - uses: actions/upload-artifact@v7
+        if: matrix.variant == 'profile'
+        with:
+          name: cpu-profiles
+          path: ${{ runner.temp }}/prof
+
+  micro:
+    name: "micro ${{ matrix.runner }}"
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: [windows-11-arm, windows-latest]
+    steps:
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.22.0
+      - shell: pwsh
+        run: |
+          Invoke-WebRequest "$env:PATCH_BASE/micro.mjs" -OutFile "$env:RUNNER_TEMP\micro.mjs"
+          node "$env:RUNNER_TEMP\micro.mjs" "$env:RUNNER_TEMP\.micro"
