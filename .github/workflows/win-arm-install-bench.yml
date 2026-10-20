@@ -52,8 +52,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [base, ntfs, ntfsnolinux]
-        sample: [1, 2, 3, 4]
+        variant: [base, ntfsnolinux, ntfsw4nolinux, ntfspnpm12]
+        sample: [1, 2, 3]
     steps:
       - name: Runner diagnostics
         shell: pwsh
@@ -145,7 +145,7 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         continue-on-error: true
         with:
-          name: dependency-verification-${{ (matrix.variant == 'pnpm11latest' || matrix.variant == 'pnpm12') && matrix.variant || 'base' }}
+          name: dependency-verification-${{ (matrix.variant == 'pnpm11latest' && 'pnpm11latest') || (endsWith(matrix.variant, 'pnpm12') && 'pnpm12') || 'base' }}
           path: ${{ runner.temp }}/pnpm-metadata
 
       - name: Primitive throughput
