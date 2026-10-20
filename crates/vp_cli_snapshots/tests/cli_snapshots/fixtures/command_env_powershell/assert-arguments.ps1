@@ -17,23 +17,38 @@ Assert-Arguments (vp env exec node print-args.cjs 'value with spaces' -- --templ
 $prefix = @('env', 'exec', 'node', 'print-args.cjs')
 $suffix = @('--template', 'react-ts')
 $allArguments = $prefix + @('--') + $suffix
-Assert-Arguments (vp @prefix -- --template react-ts) '["--","--template","react-ts"]'
 Assert-Arguments (vp env exec node print-args.cjs -- @suffix) '["--","--template","react-ts"]'
-Assert-Arguments (vp @prefix -- @suffix) '["--","--template","react-ts"]'
 Assert-Arguments (vp @allArguments) '["--","--template","react-ts"]'
-$emptyArguments = @()
-Assert-Arguments (vp @prefix @emptyArguments -- @emptyArguments @suffix) '["--","--template","react-ts"]'
+Assert-Arguments (vp @prefix '--' @suffix) '["--","--template","react-ts"]'
 Assert-Arguments (vp env exec node print-args.cjs @('before', 'separator') -- @('after', 'separator')) '["before","separator","--","after","separator"]'
+
+# A splat before -- makes its position unknowable from syntax alone. Preserve
+# PowerShell's bound arguments in that case instead of guessing an insertion point.
+Assert-Arguments (vp @prefix -- --template react-ts) '["--template","react-ts"]'
+Assert-Arguments (vp @prefix -- @suffix) '["--template","react-ts"]'
+$emptyArguments = @()
+Assert-Arguments (vp @prefix @emptyArguments -- @emptyArguments @suffix) '["--template","react-ts"]'
+$script:scopedPrefix = $prefix
+$script:scopedSuffix = $suffix
+Assert-Arguments (vp @script:scopedPrefix -- @script:scopedSuffix) '["--template","react-ts"]'
+Assert-Arguments (vp @script:scopedPrefix '--' @script:scopedSuffix) '["--","--template","react-ts"]'
+Assert-Arguments (vp env exec node print-args.cjs -- @script:scopedSuffix) '["--","--template","react-ts"]'
+
+# Argument expressions can change a splatted variable after it has been expanded.
+Assert-Arguments (vp @prefix -- @script:scopedSuffix $($script:scopedSuffix = @(); 'last')) '["--template","react-ts","last"]'
 
 # The caller AST must identify the invocation inside a function or on a later line.
 function Invoke-ArgumentCheck {
-    Assert-Arguments (vp @prefix -- @suffix) '["--","--template","react-ts"]'
+    Assert-Arguments (vp env exec node print-args.cjs -- @suffix) '["--","--template","react-ts"]'
 }
 Invoke-ArgumentCheck
 Assert-Arguments (& vp env exec node print-args.cjs `
     -- `
     --template react-ts) '["--","--template","react-ts"]'
 Assert-Arguments (vp env exec node print-args.cjs first -- second | ForEach-Object { $_ }) '["first","--","second"]'
+$first = vp env exec node print-args.cjs one -- two; $second = vp env exec node print-args.cjs three -- four
+Assert-Arguments $first '["one","--","two"]'
+Assert-Arguments $second '["three","--","four"]'
 
 # Recovering the separator must not evaluate argument expressions a second time.
 $script:argumentEvaluations = 0

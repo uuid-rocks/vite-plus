@@ -361,40 +361,27 @@ if ($__vp_stack.Count -gt 1) {
     }
 }
 if ($__vp_command) {
+    $__vp_index = 0
     $__vp_elements = $__vp_command.CommandElements
     for ($__vp_i = 1; $__vp_i -lt $__vp_elements.Count; $__vp_i++) {
-        if ($__vp_elements[$__vp_i].Extent.Text -ceq '--') {
-            $__vp_index = 0
-            for ($__vp_j = 1; $__vp_j -lt $__vp_i; $__vp_j++) {
-                $__vp_element = $__vp_elements[$__vp_j]
-                if ($__vp_element -is [System.Management.Automation.Language.VariableExpressionAst] -and $__vp_element.Splatted) {
-                    # Count from the end when the prefix has a variable length.
-                    $__vp_index = $args.Count
-                    for ($__vp_k = $__vp_i + 1; $__vp_k -lt $__vp_elements.Count; $__vp_k++) {
-                        $__vp_tail = $__vp_elements[$__vp_k]
-                        if ($__vp_tail -is [System.Management.Automation.Language.VariableExpressionAst] -and $__vp_tail.Splatted) {
-                            $__vp_value = $ExecutionContext.SessionState.PSVariable.GetValue($__vp_tail.VariablePath.UserPath)
-                            if ($__vp_value -is [System.Collections.IDictionary]) {
-                                $__vp_index -= 2 * $__vp_value.Count
-                            } else {
-                                $__vp_index -= @($__vp_value).Count
-                            }
-                        } else {
-                            $__vp_index--
-                        }
-                    }
-                    break
-                }
-                $__vp_index++
-                if ($__vp_element -is [System.Management.Automation.Language.CommandParameterAst] -and $__vp_element.Argument) {
-                    $__vp_index++
-                }
-            }
-            $__vp_arguments = [System.Collections.Generic.List[object]]::new()
-            $__vp_arguments.AddRange($args)
-            $__vp_arguments.Insert($__vp_index, '--')
-            $args = $__vp_arguments.ToArray()
+        $__vp_element = $__vp_elements[$__vp_i]
+        # A preceding splat has an unknown length. Leave $args unchanged rather
+        # than reading caller variables, which may have changed or belong to another scope.
+        if ($__vp_element -is [System.Management.Automation.Language.VariableExpressionAst] -and $__vp_element.Splatted) {
             break
+        }
+        if ($__vp_element.Extent.Text -ceq '--') {
+            if ($__vp_index -le $args.Count) {
+                $__vp_arguments = [System.Collections.Generic.List[object]]::new()
+                $__vp_arguments.AddRange($args)
+                $__vp_arguments.Insert($__vp_index, '--')
+                $args = $__vp_arguments.ToArray()
+            }
+            break
+        }
+        $__vp_index++
+        if ($__vp_element -is [System.Management.Automation.Language.CommandParameterAst] -and $__vp_element.Argument) {
+            $__vp_index++
         }
     }
 }
