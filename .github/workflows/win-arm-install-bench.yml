@@ -52,8 +52,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [profile]
-        sample: [1]
+        variant: [base, nolinux]
+        sample: [1, 2, 3, 4, 5, 6]
     steps:
       - name: Runner diagnostics
         shell: pwsh
@@ -174,17 +174,3 @@ jobs:
           name: cpu-profiles
           path: ${{ runner.temp }}/prof
 
-  micro:
-    name: "micro ${{ matrix.runner }}"
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      matrix:
-        runner: [windows-11-arm, windows-latest]
-    steps:
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24.22.0
-      - shell: pwsh
-        run: |
-          Invoke-WebRequest "$env:PATCH_BASE/micro.mjs" -OutFile "$env:RUNNER_TEMP\micro.mjs"
-          node "$env:RUNNER_TEMP\micro.mjs" "$env:RUNNER_TEMP\.micro"
