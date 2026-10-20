@@ -52,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [base, ntfsnolinux, ntfsw4nolinux, ntfspnpm12]
+        variant: [base, ntfsw4, ntfsw4oscli, ntfspnpm12oscli]
         sample: [1, 2, 3]
     steps:
       - name: Runner diagnostics
@@ -165,7 +165,8 @@ jobs:
           $tp = Start-Process typeperf -ArgumentList '"\Processor(_Total)\% Processor Time"', '"\PhysicalDisk(_Total)\% Idle Time"', '"\Network Interface(*)\Bytes Received/sec"', '-si', '1', '-o', $perf, '-y' -PassThru -WindowStyle Hidden
           if ($env:BENCH_NODE_OPTIONS) { $env:NODE_OPTIONS = $env:BENCH_NODE_OPTIONS }
           $sw = [Diagnostics.Stopwatch]::StartNew()
-          vp install $env:FILTERS.Split(' ')
+          $extra = if ($env:BENCH_EXTRA_ARGS) { @('--') + $env:BENCH_EXTRA_ARGS.Split(' ') } else { @() }
+          vp install $env:FILTERS.Split(' ') @extra
           $code = $LASTEXITCODE
           $sw.Stop()
           Stop-Process -Id $tp.Id -ErrorAction SilentlyContinue
