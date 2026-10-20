@@ -52,8 +52,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [base, w8, w16, net128, pnpm11latest, pnpm12]
-        sample: [1, 2]
+        variant: [base, nolinux, nativeonly, copy, pnpm11latest]
+        sample: [1, 2, 3]
     steps:
       - name: Runner diagnostics
         shell: pwsh
