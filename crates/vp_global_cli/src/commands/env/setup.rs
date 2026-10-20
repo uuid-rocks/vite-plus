@@ -1095,6 +1095,8 @@ Register-ArgumentCompleter -Native -CommandName vpr -ScriptBlock $__vpr_comp
 // Keep the wrapper outside bin so it cannot shadow the native executable.
 // Unlike an advanced function, this script forwards all arguments without
 // PowerShell consuming common parameters such as -Verbose or its -V alias.
+// Bare -- recovery is inspired by mise's __mise_restore_double_dash:
+// https://github.com/jdx/mise/blob/34ec0439c868379be87a28591f50d41f84fb8d02/src/shell/pwsh.rs#L45-L103
 const VP_WRAPPER_PS1: &str = r#"# Vite+ PowerShell wrapper (https://viteplus.dev)
 $__vp_bin = '__VP_BIN_WIN__'
 # PowerShell consumes the first bare -- when calling a script. Recover its
