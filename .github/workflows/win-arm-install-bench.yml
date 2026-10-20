@@ -73,12 +73,12 @@ jobs:
           if [[ -z "$disk" ]]; then echo "No raw disk"; exit 1; fi
           dp "select disk $disk" "convert gpt" "create partition primary" "assign letter=D"
           cmd //c "echo Y| format D: /DevDrv /Q /V:Workspace"
+          fsutil devdrv trust D:
           vol=$(mountvol D: //L | tr -d ' \r')
           # With a drive letter and a folder mount on the same volume, pnpm 11.10 installed nothing.
           mountvol D: //D
           ws=$(cygpath -w "$GITHUB_WORKSPACE")
           mountvol "$ws" "$vol"
-          fsutil devdrv trust "$ws"
           echo "pnpm_config_store_dir=$ws\.pnpm-store" >> "$GITHUB_ENV"
 
       - name: Exclude the Dev Drive from Defender
